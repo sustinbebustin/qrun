@@ -1,0 +1,47 @@
+name: Release
+
+# Runs GoReleaser when a GitHub release is published: it attaches the
+# archives and checksums to that release and pushes the Homebrew cask to
+# sustinbebustin/homebrew-tap. A prerelease gets the archives but no cask.
+#
+# The release itself comes first and carries the notes: move [Unreleased] in
+# CHANGELOG.md under the new version, push, then publish a release tagged
+# vX.Y.Z with that section as its body.
+#
+# The dry run on every pull request is ci.yml's release-check job.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    # Write access exists only here, to attach the archives to the release.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          # No later step needs git credentials; keep the token out of
+          # .git/config.
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          # Pinned: the cask's install_steps hook needs v2.19 or later, and
+          # the Makefile's GORELEASER_VERSION matches. Bump both together.
+          version: v2.19.0
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Without the secret it is empty, which keeps the cask out of the
+          # tap (.goreleaser.yaml skip_upload).
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

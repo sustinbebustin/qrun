@@ -6,6 +6,8 @@ It ships as a public binary: no project names, organisations or local paths in c
 
 `make test` for unit tests, `make e2e` for the cross-process checks, `make ci` before pushing.
 
+Record every user-visible change under `[Unreleased]` in [CHANGELOG.md](./CHANGELOG.md); it becomes the release notes. Releases follow the README's Release section. The CI job names are the required status checks of the repository's `main` ruleset, so renaming a job means updating the ruleset.
+
 ## Layout
 
 - `cmd/qrun` -- argument parsing, help, and the wiring in `throttle.go`: queue, then budget, then the work.

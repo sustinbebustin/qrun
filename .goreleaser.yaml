@@ -1,0 +1,69 @@
+version: 2
+
+project_name: qrun
+
+builds:
+  - id: qrun
+    main: ./cmd/qrun
+    binary: qrun
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: qrun
+    ids: [qrun]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+# The GitHub release is published first, with the version's section of
+# CHANGELOG.md as its notes, and publishing it is what starts release.yml.
+# GoReleaser attaches the archives to that release and leaves its notes
+# alone (release.mode defaults to keep-existing), so it generates none.
+changelog:
+  disable: true
+
+release:
+  prerelease: auto
+
+# A cask, not a formula: `brews` is deprecated (GoReleaser v2.16), and a cask
+# is how Homebrew expects a pre-built binary to be shipped, on Linux as well
+# as macOS. Install with `brew install --cask sustinbebustin/tap/qrun`.
+homebrew_casks:
+  - name: qrun
+    ids: [qrun]
+    binaries: [qrun]
+    description: Run heavy commands one at a time, inside a shared CPU and memory budget
+    homepage: https://github.com/sustinbebustin/qrun
+    url:
+      template: "https://github.com/sustinbebustin/qrun/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+    repository:
+      owner: sustinbebustin
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    # Without the secret (a fork, a local snapshot) the cask is built but not
+    # pushed. With it, auto still keeps a prerelease out of the tap.
+    skip_upload: '{{ if isEnvSet "HOMEBREW_TAP_TOKEN" }}auto{{ else }}true{{ end }}'
+    # Homebrew quarantines what a cask downloads, and Gatekeeper refuses a
+    # quarantined binary Apple has not notarized. Removing the attribute
+    # after install trusts the binary on the strength of the HTTPS download
+    # and the cask's sha256. Harmless if the binary is ever notarized.
+    hooks:
+      post:
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/qrun"]
+          end

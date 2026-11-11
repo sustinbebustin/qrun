@@ -14,11 +14,19 @@ It needs no daemon and no cooperation from the caller. Put it inside the project
 
 ## Install
 
+With Homebrew, on Linux or macOS:
+
+```sh
+brew install --cask sustinbebustin/tap/qrun
+```
+
+With Go:
+
 ```sh
 go install github.com/sustinbebustin/qrun/cmd/qrun@latest
 ```
 
-From a checkout: `make install`.
+From a checkout: `make install`. Pre-built archives are attached to each [release](https://github.com/sustinbebustin/qrun/releases).
 
 ## Use
 
@@ -133,5 +141,12 @@ An invalid file is reported and the defaults are used. A run is never blocked by
 make test   # unit tests, with the race detector
 make e2e    # the built binary across real processes: order, crashes, signals
 make lint
-make ci     # everything
+make ci     # everything CI runs
 ```
+
+## Release
+
+1. Move the `[Unreleased]` entries in [CHANGELOG.md](./CHANGELOG.md) under `## [X.Y.Z] - <date>` and push to `main`.
+2. Publish a GitHub release tagged `vX.Y.Z` with that section as its notes.
+
+Publishing starts `.github/workflows/release.yml`: GoReleaser attaches the archives and checksums to the release and pushes the cask to [sustinbebustin/homebrew-tap](https://github.com/sustinbebustin/homebrew-tap). A prerelease tag (`v1.2.0-rc.1`) gets the archives but stays out of the tap. `make release-check` is the dry run.

@@ -1,6 +1,10 @@
-.PHONY: build test e2e lint vuln ci install tidy clean
+.PHONY: build test e2e lint vuln release-check ci install tidy clean
 
 GO := GOTOOLCHAIN=auto go
+
+# The GoReleaser that release-check runs; release.yml pins the same version.
+GORELEASER_VERSION := v2.19.0
+GORELEASER := $(GO) run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 
 build:
 	$(GO) build ./...
@@ -26,8 +30,14 @@ lint:
 vuln:
 	$(GO) run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
-# Run before pushing.
-ci: build test lint vuln e2e
+# Validate .goreleaser.yaml, then run a snapshot release into dist/: the
+# archives, checksums and Homebrew cask, with nothing published.
+release-check:
+	$(GORELEASER) check
+	$(GORELEASER) release --snapshot --clean --skip=publish
+
+# Mirror of the .github/workflows/ci.yml jobs. Run before pushing.
+ci: build test lint vuln e2e release-check
 
 install:
 	$(GO) install ./cmd/qrun
