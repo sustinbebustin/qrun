@@ -4,8 +4,10 @@
 //
 // The goal is a command surface a person or a coding agent can trust without
 // reading pages of tool output: run the bare command, read a few lines, never
-// pipe, grep or redirect. Nothing is hidden, because the full log is always
-// written; the filtering only chooses what to print.
+// pipe, grep or redirect. For an agent the saving is literal: passing output
+// it never sees costs no tokens and takes no room in its context window.
+// Nothing is hidden, because the full log is always written; the filtering
+// only chooses what to print.
 package steps
 
 import (
