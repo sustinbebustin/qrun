@@ -1,0 +1,94 @@
+version: "2"
+
+run:
+  timeout: 3m
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+linters:
+  enable:
+    # Correctness
+    - staticcheck
+    - govet
+    - errcheck
+    - gosec
+
+    # Quality
+    - unused
+    - ineffassign
+    - gocritic
+    - revive
+    - unparam
+    - errorlint
+    - forbidigo
+    - copyloopvar
+    - gocheckcompilerdirectives
+
+    # Style & cleanup
+    - misspell
+    - whitespace
+    - unconvert
+    - nolintlint
+
+  settings:
+    errcheck:
+      check-blank: true
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+
+    gosec:
+      excludes:
+        - G104  # duplicate of errcheck
+        - G204  # subprocess with variable input -- running the caller's command is what qrun is for
+        - G301  # directory perms -- 0o755 is correct for log dirs; queue dirs are 0o700
+        - G304  # file inclusion via variable -- queue, slot, log and settings paths are computed
+        - G702  # command injection via taint -- same as G204: the caller's command is the input
+        - G703  # taint via env var -- paths derive from HOME, TMPDIR and XDG_CONFIG_HOME by design
+        - G704  # duplicate of errcheck
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+      disabled-checks:
+        - hugeParam        # Modern escape analysis handles value-vs-pointer better than a byte threshold
+        - paramTypeCombine # Cosmetic; fights explicit per-arg typing
+        - unnamedResult    # Cosmetic
+
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: error-return
+        - name: error-strings
+        - name: increment-decrement
+        - name: var-declaration
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+
+    forbidigo:
+      forbid:
+        - pattern: 'context\.TODO'
+          msg: "use the caller's context instead of context.TODO"
+
+  exclusions:
+    rules:
+      - linters:
+          - errcheck
+          - unparam
+        path: _test\.go

@@ -1,0 +1,16 @@
+# Build output
+/dist/
+/qrun
+
+# Test and coverage artifacts
+*.test
+*.out
+coverage.*
+
+# Per-user tooling
+/.claude/
+
+# Editor and OS cruft
+/.idea/
+/.vscode/
+.DS_Store
