@@ -3,6 +3,7 @@ package steps
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -114,6 +115,35 @@ func TestCancellingStopsTheStepAndItsChildren(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if _, err := os.Stat(marker); err == nil {
 		t.Error("a child of the cancelled step kept running, or a later step ran")
+	}
+}
+
+func TestADeadlineStopsTheStepAndSaysWhoseItWas(t *testing.T) {
+	t.Setenv("QRUN_NO_PROGRESS", "1")
+	marker := filepath.Join(t.TempDir(), "survived")
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 100*time.Millisecond, errors.New("timed out at the 100ms time limit"))
+	defer cancel()
+
+	steps := []Step{
+		{Label: "stuck", Cmd: "sh -c 'sleep 5; touch " + marker + "' & wait"},
+		{Label: "never", Cmd: "touch " + marker},
+	}
+	start := time.Now()
+	results := Run(ctx, steps, Options{LogDir: t.TempDir()})
+
+	if took := time.Since(start); took > 3*time.Second {
+		t.Errorf("Run took %s after the deadline; the step was not stopped", took)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want only the step that timed out", len(results))
+	}
+	// 124 and not 130: a caller must be able to tell a deadline from a cancel.
+	if r := results[0]; r.OK || r.Reason != "timed out at the 100ms time limit" || r.ExitCode != 124 {
+		t.Errorf("result = %+v, want the deadline's own reason and exit 124", r)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("a child of the stopped step kept running, or a later step ran")
 	}
 }
 
