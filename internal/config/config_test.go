@@ -91,6 +91,21 @@ func TestParse(t *testing.T) {
 		}
 	})
 
+	t.Run("time_limit takes a duration, and is off unless set", func(t *testing.T) {
+		if def.TimeLimit != 0 {
+			t.Errorf("default time limit = %v, want none", def.TimeLimit)
+		}
+		for text, want := range map[string]time.Duration{`time_limit = "30m"`: 30 * time.Minute, `time_limit = "0"`: 0} {
+			c, err := Parse(text, def)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.TimeLimit != want {
+				t.Errorf("Parse(%q).TimeLimit = %v, want %v", text, c.TimeLimit, want)
+			}
+		}
+	})
+
 	t.Run("zero slots and zero cpus are valid ways to switch a limit off", func(t *testing.T) {
 		c, err := Parse("slots = 0\n[budget]\ncpus = 0\nenabled = false\n", def)
 		if err != nil {
@@ -111,6 +126,8 @@ func TestParse(t *testing.T) {
 		{"percentage over 100", "[budget]\nmemory_max = \"150%\"", "budget.memory_max"},
 		{"hold that is not a duration", "hold = \"soon\"", "hold"},
 		{"negative hold", "hold = \"-5m\"", "hold"},
+		{"time limit that is not a duration", "time_limit = 30", "time_limit"},
+		{"negative time limit", "time_limit = \"-1h\"", "time_limit"},
 		{"unknown key", "slot = 2", "slot"},
 		{"unknown budget key", "[budget]\nmem_max = \"1G\"", "budget.mem_max"},
 		{"wrong type", "slots = \"two\"", "slots"},

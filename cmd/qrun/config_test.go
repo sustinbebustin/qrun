@@ -181,7 +181,7 @@ func TestConfigSet(t *testing.T) {
 		}{
 			{[]string{"config", "set", "slots", "-1"}, "example: qrun config set slots 2"},
 			{[]string{"config", "set", "budget.memory_max", "1.5G"}, "example: qrun config set budget.memory_max 16G"},
-			{[]string{"config", "set", "slot", "2"}, "known: slots, hold, budget.enabled"},
+			{[]string{"config", "set", "slot", "2"}, "known: slots, hold, time_limit, budget.enabled"},
 			{[]string{"config", "set", "slots=2", "budget.cpus"}, "KEY=VALUE"},
 			{[]string{"config", "set"}, "nothing to set"},
 			{[]string{"config", "set", "--force", "slots", "2"}, "unknown flag"},

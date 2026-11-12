@@ -45,7 +45,7 @@ func TestTemplate(t *testing.T) {
 	})
 
 	t.Run("shows every key with its default", func(t *testing.T) {
-		for _, want := range []string{"# slots = 1\n", "# hold = \"5m\"\n", "[budget]\n", "# enabled = true\n", "# cpus = 10\n", "# memory_max = \"12297564K\"\n", "# memory_high = \"none\"\n"} {
+		for _, want := range []string{"# slots = 1\n", "# hold = \"5m\"\n", "# time_limit = \"0\"\n", "[budget]\n", "# enabled = true\n", "# cpus = 10\n", "# memory_max = \"12297564K\"\n", "# memory_high = \"none\"\n"} {
 			if !strings.Contains(text, want) {
 				t.Errorf("template lacks %q:\n%s", want, text)
 			}
@@ -57,6 +57,7 @@ func TestTemplate(t *testing.T) {
 var sampleValues = map[string]string{
 	"slots":              "3",
 	"hold":               "1m30s",
+	"time_limit":         "45m",
 	"budget.enabled":     "false",
 	"budget.cpus":        "6",
 	"budget.memory_max":  "8G",
@@ -168,6 +169,7 @@ func TestSet(t *testing.T) {
 		for name, value := range map[string]string{
 			"slots":              "-1",
 			"hold":               "soon",
+			"time_limit":         "never",
 			"budget.enabled":     "yes",
 			"budget.cpus":        "half",
 			"budget.memory_max":  "1.5G",
