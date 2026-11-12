@@ -89,7 +89,7 @@ verify FAIL: test
 3. Start the same command in a second checkout while the first is running. It waits its turn and says so on stderr.
 
 ```text
-qrun: queued at position 1; running now: verify in ~/src/app (pid 41270, 12.4s). Cancelling loses this place in line.
+qrun: queued at position 1; running now: verify in ~/src/app (pid 41270, 12.4s). If cancelled, this place is held for 5m for the same command run again.
 qrun: started after 29.3s in line
 [PASS] verify  40.8s  ·  vet test
 ```
@@ -106,8 +106,19 @@ running (1 of 1 slot):
 waiting (2), next first:
   1. verify  in ~/src/app-worktrees/fix-login  pid 41388  waited 58.0s
   2. go test  in ~/src/api  pid 41502  waited 9.1s
-budget: 11 CPUs, memory capped at 12G with swap off, shared by all runs (qrun.slice)
-settings: defaults (create ~/.config/qrun/config.toml to change them)
+budget: 11 CPUs, memory capped at 12297564K with swap off, shared by all runs (qrun.slice)
+settings: defaults (`qrun config set KEY VALUE` changes one; `qrun config` lists them)
+```
+
+5. Change a limit. The setting is machine-wide, and it reaches runs that are already waiting.
+
+```sh
+qrun config set slots 2
+```
+
+```text
+slots = 2  (was 1)
+settings file: /home/you/.config/qrun/config.toml (in force from the next run)
 ```
 
 ## Wire it into a project
@@ -143,22 +154,24 @@ Both are ordinary command lines, so a Makefile or a `package.json` script takes 
 |---|---|
 | `qrun --step 'label=command' [--step ...]` | Quiet run. Waits for a slot, runs the steps in order inside the budget, prints a summary. `--title NAME` names a multi-step run. `--log-dir DIR` moves the `<label>.log` files (default: a per-checkout directory under `$TMPDIR`; a failure prints the exact path). `--show-on-success` also prints a passing step's output, for a step whose output is the point (a generated diff). `--fail-nonempty` fails a step that exits 0 but writes to stdout, for format checks such as `gofmt -l`. |
 | `qrun exec -- command [args...]` | The same queue and budget in front of one command, with its stdin, stdout, stderr and exit status passed through. `--title NAME` sets the name shown to other runs (default: the command and its subcommand, such as `go test`). |
-| `qrun status` | What is running, what is waiting in order, the limits in force and the settings file. `--json` for a machine-readable form. |
+| `qrun status` | What is running, what is waiting in order, the places held for cancelled runs, the limits in force and the settings file. `--json` for a machine-readable form. |
+| `qrun config` | The machine-wide settings: `show`, `get KEY`, `set KEY VALUE`, `unset KEY`, `init`, `check`, `path`. See [Configuration](#configuration). |
 | `qrun version` | Print the version. |
 
 `--no-queue`, on a quiet run or on `exec`, skips the line and still runs inside the budget. It is for short jobs, such as a lint of one package after an edit.
 
-`qrun --help`, `qrun exec --help` and `qrun status --help` each list their flags with examples.
+`qrun --help`, `qrun exec --help`, `qrun status --help` and `qrun config --help` each list their flags with examples.
 
 ## Scripting and agents
 
 qrun never prompts, and a usage error exits before anything runs or waits, with a correct example invocation.
 
 - **stdout is the result, stderr is commentary.** The summary (or, under `exec`, the command's own output) is on stdout. Queue messages and progress go to stderr.
-- **Exit status.** Quiet run: `0` every step passed, `1` a step failed, `2` usage error, `130` interrupted. `exec`: the command's own status, `127` if it cannot be started, `130` if interrupted while queued. `status`: `0`, or `1` if the queue cannot be read.
-- **Progress.** On a terminal, a spinner that erases itself. On a pipe or in a background run, a `... <step> running (40.0s)` line every 20 seconds, and while queued, `qrun: still queued after 1m30s, position 2` every 30 seconds, so a waiting run is never mistaken for a hung one.
+- **Exit status.** Quiet run: `0` every step passed, `1` a step failed, `2` usage error, `130` interrupted. `exec`: the command's own status, `127` if it cannot be started, `130` if interrupted while queued. `status`: `0`, or `1` if the queue cannot be read. `config`: `0`, `1` if the settings file is invalid or cannot be written, `2` usage error.
+- **Progress.** On a terminal, a spinner that erases itself. On a pipe or in a background run, a `... <step> running (40.0s)` line every 20 seconds, and while queued, `qrun: still queued after 1m30s, position 2; running now: ...` every 30 seconds, so a waiting run is never mistaken for a hung one and a run that has held the slot far too long is in plain sight.
 - **Read the summary, not the log.** A failed step's excerpt is its diagnostics: `file:line` references, test failures, panics and compiler errors across common toolchains, or the tail of the output when nothing matches. Color is switched off for the steps. The full log is always written, and its path is printed for the cases the excerpt does not settle.
-- **Do not cancel a queued run to retry it.** A cancelled run loses its place and rejoins at the back. With many agents the wait can outlast a default command timeout, so give verification a long timeout or run it in the background.
+- **A queued run that is cancelled keeps its place.** With many agents the wait can outlast a command timeout, and a retry that went to the back of the line each time would never be admitted. So a run that leaves the line before it starts, cancelled or killed, has its place held for 5 minutes (the `hold` setting): the same command run again from the same directory rejoins there. Nothing waits for a held place, so a run that never comes back delays nobody. It is still better to give verification a long timeout or run it in the background: a run cancelled after it has started loses its work.
+- **Settings without an editor.** `qrun config set KEY VALUE` validates and writes one key, `--dry-run` previews it, and running it twice changes nothing the second time. `qrun config get KEY` prints a bare value, and `qrun config show --json` and `qrun status --json` are machine-readable.
 - **A step may call qrun.** A run that already holds a slot does not queue behind itself.
 
 An agent only gets the benefit if it runs the recipe bare. Piping the summary through `tail`, `grep` or a redirect buys nothing and can hide the failure. For a project's agent instructions:
@@ -171,32 +184,48 @@ already reduced to one line on success, or the failing lines and a log path.
 Read the log only when the excerpt is not enough.
 
 `qrun: queued at position N` means another run on this machine holds the slot.
-Wait for it. Do not cancel and retry: a cancelled run goes to the back of the line.
+Wait for it, with a long timeout or in the background. If the command times out
+while queued, run the same command again: it takes its place in line back.
 ```
 
 ## Configuration
 
-One file for the whole machine, `~/.config/qrun/config.toml` (or under `$XDG_CONFIG_HOME`). Everything in it is optional. These are the defaults on a 22-core, 24 GB machine:
+The settings are machine-wide, and `qrun config` reads and changes them. No editor and no file format to learn:
 
-```toml
-# Runs allowed at once, machine-wide. 0 turns the queue off.
-slots = 1
-
-[budget]
-# false runs everything with no CPU or memory limit.
-enabled = true
-# CPU quota in whole cores. 0 means no CPU limit. Default: half the cores.
-cpus = 11
-# Hard memory cap, enforced with swap off. "none" removes it. Default: half of RAM.
-# A whole number with K, M, G or T, or a percentage of RAM such as "50%".
-memory_max = "12G"
-# Soft limit that throttles before the cap. Default: none; see How it works.
-memory_high = "none"
+```sh
+qrun config                                          # every setting in force, and which ones you set
+qrun config set slots 2                              # change one
+qrun config set budget.cpus=8 budget.memory_max=16G  # or several
+qrun config set --dry-run hold 10m                   # preview: validates and writes nothing
+qrun config unset slots                              # back to the default
+qrun config get budget.memory_max                    # one bare value, for a script
 ```
 
-- The file is read by every run, so an edit takes effect on the next one. `qrun status` shows the values in force.
-- Settings are per machine, never per caller: every run shares one line and one budget, so two callers with different numbers would each enforce a different limit on the same machine.
-- An invalid file is reported with every problem in it, and the defaults are used. A run is never blocked by its own throttle.
+```text
+slots = 2                    # set in the settings file (default: 1)
+hold = "5m"                  # default
+budget.enabled = true        # default
+budget.cpus = 8              # set in the settings file (default: 11)
+budget.memory_max = "16G"    # set in the settings file (default: 12297564K)
+budget.memory_high = "none"  # default
+# settings file: /home/you/.config/qrun/config.toml
+```
+
+| Key | Meaning | Default |
+|---|---|---|
+| `slots` | Runs allowed at once, machine-wide. `0` turns the queue off. | `1` |
+| `hold` | How long a cancelled run's place in line is kept for a rerun of the same command from the same directory. A duration such as `90s` or `5m`; `0` gives the place up at once. | `5m` |
+| `budget.enabled` | `false` runs everything with no CPU or memory limit. | `true` |
+| `budget.cpus` | CPU quota in whole cores. `0` means no CPU limit. | half the cores |
+| `budget.memory_max` | Hard memory cap, enforced with swap off. A whole number with `K`, `M`, `G` or `T`, a percentage of RAM such as `50%`, or `none`. | half of RAM |
+| `budget.memory_high` | Soft limit that throttles before the cap, in the same form. See [How it works](#how-it-works). | `none` |
+
+They live in one file, `~/.config/qrun/config.toml` (or under `$XDG_CONFIG_HOME`), which you can also edit by hand. `qrun config init` writes it with every key commented out at its default, beside its explanation, and `qrun config check` validates it.
+
+- **`set` and `unset` edit the file in place.** Its comments and layout are kept, and a file kept as a symlink into a dotfiles repository is written through the link. A file in a layout qrun cannot edit safely is left untouched, with a message saying so.
+- **A change is in force from the next run.** A new slot count also reaches runs that are already waiting, within a couple of seconds.
+- **Settings are per machine, never per caller.** Every run shares one line and one budget, so two callers with different numbers would each enforce a different limit on the same machine. That is why there is no flag or environment variable for them.
+- **An invalid file is reported with every problem in it, and the defaults are used.** A run is never blocked by its own throttle.
 
 Two environment variables opt a single run out without changing the shared limits:
 
@@ -207,7 +236,7 @@ Two environment variables opt a single run out without changing the shared limit
 
 ## How it works
 
-**The queue** is files under one per-user directory (`/run/user/<uid>/qrun`, or `/tmp/qrun-<uid>`), and every claim on it is an `flock` held by the claiming process. A run takes the next ticket number, then waits until no live ticket has a lower number and a slot is free. Only the head of the line may take a slot, which is what makes the order strict. A run that crashes or is killed gives up its ticket and its slot the moment the kernel closes its files, so there is no daemon and nothing to clean up.
+**The queue** is files under one per-user directory (`/run/user/<uid>/qrun`, or `/tmp/qrun-<uid>`), and every claim on it is an `flock` held by the claiming process. A run takes the next ticket number, then waits until no live ticket has a lower number and a slot is free. Only the head of the line may take a slot, which is what makes the order strict. A run that crashes or is killed gives up its slot the moment the kernel closes its files, so there is no daemon and nothing to clean up. A run that leaves the line before it is admitted leaves its ticket behind, unlocked: a held place. Nothing waits for it, and for the length of `hold` a rerun of the same command from the same directory takes the ticket, and so the number, back.
 
 **The budget** is one systemd user slice, `qrun.slice`. qrun re-executes itself inside a transient scope under it, and the CPU quota and memory cap sit on the slice, so every run on the machine shares them however many overlap. The memory cap is hard, with swap off: when it is hit the kernel kills one process inside the slice, the step fails with exit 137 and a hint, and the rest of the machine never starts swapping. A soft limit (`memory_high`) is off by default because, below the cap, it throttles a run into continuous reclaim instead of letting it finish or fail.
 
@@ -218,9 +247,10 @@ Two environment variables opt a single run out without changing the shared limit
 | Symptom | Check |
 |---|---|
 | A run waits and nothing seems to be running | `qrun status` names the run holding the slot, with its directory and pid. A stuck command there holds the line for everyone; stop it and the next run starts at once. |
-| A step fails with `exit 137` | The kernel killed a process because the shared budget hit `memory_max`. `journalctl -k \| grep oom-kill` confirms. Rerun once other runs finish, lower the step's own parallelism, or raise `budget.memory_max`. |
-| `qrun status` says the budget is not enforced | This machine has no systemd user manager with the cpu controller delegated (macOS, most containers). The queue still applies. |
-| `settings file ignored` on stderr | The settings file has an unknown key or an invalid value. The message lists each one; the defaults are in force until it is fixed. |
+| A run that queued later was admitted first | It rejoined a held place: an earlier attempt of the same command from that directory was cancelled while queued. `qrun status` lists held places. `qrun config set hold 0` turns holding off. |
+| A step fails with `exit 137` | The kernel killed a process because the shared budget hit `memory_max`. `journalctl -k \| grep oom-kill` confirms. Rerun once other runs finish, lower the step's own parallelism, or raise the cap with `qrun config set budget.memory_max SIZE`. |
+| `qrun status` says the budget is not enforced | It gives the reason. No systemd (macOS, most containers): nothing to do, the queue still applies. The cpu controller is not delegated: add `Delegate=cpu cpuset io memory pids` under `[Service]` in a drop-in for `user@.service`, then `systemctl daemon-reload` and log in again. |
+| `settings file ignored` on stderr | The settings file has an unknown key or an invalid value. The message lists each one, and `qrun config check` repeats it; the defaults are in force until it is fixed. `qrun config set KEY VALUE` rewrites one key. |
 | Runs from one tool wait but another's do not | Only commands that go through qrun are throttled. Check that the second tool runs the recipe and not the underlying command. |
 
 ## Limitations
