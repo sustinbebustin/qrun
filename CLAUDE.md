@@ -24,3 +24,17 @@ Record every user-visible change under `[Unreleased]` in [CHANGELOG.md](./CHANGE
 - **Lock files are never inherited by children.** A step's leftover daemon would otherwise hold a slot for as long as it lived.
 - **stdout is the result, stderr is commentary.** Queue and progress messages go to stderr so `qrun exec` stays a faithful pass-through.
 - A queue change needs a case in `scripts/e2e.sh`: in-process tests cannot see what a killed process leaves behind.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues in this repo via `gh`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five roles, label = role name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md`.
