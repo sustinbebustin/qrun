@@ -47,6 +47,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return cmdExec(ctx, args[1:], stdout, stderr)
 	case "status":
 		return cmdStatus(args[1:], stdout, stderr)
+	case "config":
+		return cmdConfig(args[1:], stdout, stderr)
 	case "help", "--help", "-h":
 		fmt.Fprint(stdout, helpRun)
 		return exitOK
@@ -70,6 +72,7 @@ Usage:
   qrun [flags] --step 'label=command' [--step ...]   quiet run: a summary, not the output
   qrun exec [flags] -- command [args...]             same throttle, output untouched
   qrun status [--json]                               what is running and what is waiting
+  qrun config [set KEY VALUE | ...]                  the machine-wide settings
 
 A run first waits for a machine-wide slot, first come first served, then
 executes inside a budget shared by every qrun on the machine. A quiet run
@@ -94,13 +97,15 @@ Examples:
 
 Exit status: 0 every step passed, 1 a step failed, 2 usage error, 130 interrupted.
 
-While queued, qrun reports its position on stderr. Do not cancel a queued run
-to retry it: a cancelled run loses its place and rejoins at the back.
+While queued, qrun reports its position on stderr. Let a queued run wait. One
+that is cancelled or times out keeps its place for a few minutes: run the same
+command again from the same directory and it rejoins there, not at the back.
 
-Settings are machine-wide, in the file ` + "`qrun status`" + ` names. QRUN_BYPASS=1 runs
-with no queue and no budget. QRUN_NO_PROGRESS=1 silences the progress lines.
+Settings are machine-wide: ` + "`qrun config`" + ` lists them and ` + "`qrun config set KEY VALUE`" + `
+changes one. QRUN_BYPASS=1 runs with no queue and no budget. QRUN_NO_PROGRESS=1
+silences the progress lines.
 
-More: qrun exec --help, qrun status --help
+More: qrun exec --help, qrun status --help, qrun config --help
 `
 
 const helpExec = `qrun exec - run one command under the queue and budget, output untouched
@@ -130,6 +135,9 @@ const helpStatus = `qrun status - show what is running, what is waiting, and the
 
 Usage:
   qrun status [--json]
+
+It also lists the places held for cancelled runs to rejoin, says why the
+budget is not enforced when it is not, and names the settings file.
 
 Flags:
   --json   machine-readable output

@@ -189,6 +189,11 @@ func TestUsageErrorsShowACorrectInvocation(t *testing.T) {
 		{"--step", "noequals"},
 		{"exec"},
 		{"status", "--bogus"},
+		{"config", "bogus"},
+		{"config", "get"},
+		{"config", "show", "extra"},
+		{"config", "path", "extra"},
+		{"config", "unset"},
 	} {
 		code, stdout, stderr := invoke(args...)
 		if code != exitUsage {
@@ -209,6 +214,9 @@ func TestEveryCommandHasHelpWithExamples(t *testing.T) {
 		{"--step", "a=b", "--help"},
 		{"exec", "--help"},
 		{"status", "--help"},
+		{"config", "--help"},
+		{"config", "help"},
+		{"config", "set", "--help"},
 	} {
 		code, stdout, _ := invoke(args...)
 		if code != exitOK {
@@ -255,7 +263,7 @@ func TestRenderStatus(t *testing.T) {
 		got := renderedStatus(statusReport{Slots: 1, Budget: enforced, Config: settings})
 		want := "running: none (1 slot free)\n" +
 			"budget: 11 CPUs, memory capped at 12G with swap off, shared by all runs (qrun.slice)\n" +
-			"settings: defaults (create /home/someone/.config/qrun/config.toml to change them)\n"
+			"settings: defaults (`qrun config set KEY VALUE` changes one; `qrun config` lists them)\n"
 		if got != want {
 			t.Errorf("got:\n%s\nwant:\n%s", got, want)
 		}
@@ -280,9 +288,16 @@ func TestRenderStatus(t *testing.T) {
 		}
 	})
 
-	t.Run("says when a limit is not in force", func(t *testing.T) {
-		got := renderedStatus(statusReport{Slots: 0, Budget: budgetReport{Enabled: true}, Config: settings})
-		if !strings.Contains(got, "queue: off") || !strings.Contains(got, "budget: not enforced on this machine") {
+	t.Run("lists the places held for cancelled runs", func(t *testing.T) {
+		got := renderedStatus(statusReport{Slots: 1, Held: []gate.Entry{entry("verify", 200)}, Budget: enforced, Config: settings})
+		if want := "held (1), places kept for cancelled runs to rejoin:\n  verify  in ~/src/verify\n"; !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	})
+
+	t.Run("says when a limit is not in force, and why", func(t *testing.T) {
+		got := renderedStatus(statusReport{Slots: 0, Budget: budgetReport{Enabled: true, Reason: "systemd-run is not installed"}, Config: settings})
+		if !strings.Contains(got, "queue: off") || !strings.Contains(got, "budget: not enforced on this machine: systemd-run is not installed. Only the queue applies.\n") {
 			t.Errorf("got:\n%s", got)
 		}
 		got = renderedStatus(statusReport{Slots: 1, Budget: budgetReport{}, Config: settings})
@@ -293,7 +308,7 @@ func TestRenderStatus(t *testing.T) {
 
 	t.Run("an invalid settings file is called out with its error", func(t *testing.T) {
 		got := renderedStatus(statusReport{Slots: 1, Budget: enforced, Config: configReport{Path: settings.Path, Exists: true, Error: settings.Path + ":\n  slots = -1: must be 0 (no queue) or more"}})
-		if !strings.Contains(got, "settings: invalid, so the defaults are in force:\n  "+settings.Path+":\n    slots = -1") {
+		if !strings.Contains(got, "settings: invalid, so the defaults are in force (`qrun config set KEY VALUE` rewrites one key):\n  "+settings.Path+":\n    slots = -1") {
 			t.Errorf("got:\n%s", got)
 		}
 	})

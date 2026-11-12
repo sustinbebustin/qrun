@@ -101,7 +101,7 @@ func exitDesc(r Result) string {
 		return r.Reason
 	case r.ExitCode == 137:
 		return "exit 137: killed with SIGKILL, usually because the shared qrun budget hit its memory cap (`journalctl -k | grep oom-kill` confirms). " +
-			"Rerun once other runs finish, or raise budget.memory_max in the settings file `qrun status` names"
+			"Rerun once other runs finish, or raise the cap with `qrun config set budget.memory_max SIZE`"
 	default:
 		return fmt.Sprintf("exit %d", r.ExitCode)
 	}

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -34,18 +36,46 @@ const (
 	// stop before qrun stops waiting on it. It exceeds the steps package's
 	// own grace so an inner qrun can finish reporting first.
 	stopGrace = 15 * time.Second
+	// settingsReload is how often a waiting run rereads the settings file
+	// for the slot count, which bounds how long a change takes to reach it.
+	settingsReload = 2 * time.Second
 )
+
+// loadSettings reads the settings file over this machine's defaults. On an
+// error the config returned is the defaults.
+func loadSettings() (config.Config, error) {
+	return config.Load(config.Path(), config.Default(config.ThisMachine()))
+}
 
 // settings loads the machine-wide config. A broken file must not block a
 // run: verification matters more than the throttle around it. The problem is
 // reported and the defaults are used.
 func settings(stderr io.Writer) config.Config {
-	def := config.Default(config.ThisMachine())
-	cfg, err := config.Load(config.Path(), def)
+	cfg, err := loadSettings()
 	if err != nil && !budget.InScope() { // the outer qrun already reported it
-		fmt.Fprintf(stderr, "qrun: settings file ignored, using the defaults (1 slot, half the CPUs, half of RAM):\n%s\n  Fix the keys named above; `qrun status` shows the values in force.\n", indent(err.Error()))
+		fmt.Fprintf(stderr, "qrun: settings file ignored, using the defaults (1 slot, half the CPUs, half of RAM):\n%s\n  Fix the keys named above, by hand or with `qrun config set KEY VALUE`; `qrun config check` validates the file.\n", indent(err.Error()))
 	}
 	return cfg
+}
+
+// queue is the machine-wide line under cfg.
+func queue(cfg config.Config) gate.Gate {
+	return gate.Gate{Dir: gate.DefaultDir(), Slots: cfg.Slots, Poll: gate.DefaultPoll, Hold: cfg.Hold}
+}
+
+// liveSlots returns the slot count in force, reread from the settings file
+// at most every settingsReload. A file that turns invalid means the
+// defaults, as it does for a run that starts then.
+func liveSlots(slots int) func() int {
+	read := time.Now()
+	return func() int {
+		if time.Since(read) >= settingsReload {
+			read = time.Now()
+			cfg, _ := loadSettings() //nolint:errcheck // an invalid file is in force as the defaults, which loadSettings returns
+			slots = cfg.Slots
+		}
+		return slots
+	}
 }
 
 // throttled runs work under the queue and the budget. argv is this process's
@@ -59,10 +89,16 @@ func throttled(ctx context.Context, stderr io.Writer, title string, noQueue bool
 	cfg := settings(stderr)
 
 	if !noQueue && cfg.Slots > 0 && os.Getenv(heldEnv) == "" {
-		release, err := waitInLine(ctx, stderr, cfg.Slots, title)
+		release, err := waitInLine(ctx, stderr, cfg, title, argv)
 		switch {
 		case ctx.Err() != nil:
-			fmt.Fprintln(stderr, "qrun: interrupted while queued; nothing was run")
+			held := ""
+			if err == nil {
+				release() // admitted in the instant it was interrupted
+			} else if cfg.Hold > 0 {
+				held = fmt.Sprintf(" Its place in line is held for %s: run the same command again from this directory to take it back.", config.FormatDuration(cfg.Hold))
+			}
+			fmt.Fprintf(stderr, "qrun: interrupted while queued; nothing was run.%s\n", held)
 			return exitInterrupted
 		case err != nil:
 			fmt.Fprintf(stderr, "qrun: queue unavailable, running without waiting in line: %v\n", err)
@@ -88,14 +124,20 @@ func throttled(ctx context.Context, stderr io.Writer, title string, noQueue bool
 }
 
 // waitInLine takes a slot, reporting on stderr only if the run has to wait.
-func waitInLine(ctx context.Context, stderr io.Writer, slots int, title string) (release func(), err error) {
+// argv is what makes a later run this one's rerun: the same arguments from
+// the same directory.
+func waitInLine(ctx context.Context, stderr io.Writer, cfg config.Config, title string, argv []string) (release func(), err error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		dir = "(unknown directory)"
 	}
 	start := time.Now()
-	who := gate.Entry{Title: title, Dir: dir, PID: os.Getpid(), Since: start.UTC()}
-	g := gate.Gate{Dir: gate.DefaultDir(), Slots: slots, Poll: gate.DefaultPoll}
+	// A digest, not the arguments: a command line can carry a secret, and
+	// this is written to the queue and shown by `qrun status --json`.
+	digest := sha256.Sum256([]byte(strings.Join(argv, "\x00")))
+	who := gate.Entry{Title: title, Dir: dir, PID: os.Getpid(), Since: start.UTC(), Fingerprint: hex.EncodeToString(digest[:8])}
+	g := queue(cfg)
+	g.Reload = liveSlots(cfg.Slots)
 
 	var (
 		mu       sync.Mutex
@@ -113,7 +155,13 @@ func waitInLine(ctx context.Context, stderr io.Writer, slots int, title string) 
 			case <-ticker.C:
 				mu.Lock()
 				if position > 0 {
-					fmt.Fprintf(stderr, "qrun: still queued after %s, position %d\n", steps.Dur(time.Since(start)), position)
+					// Naming the holder each time shows a waiting caller a run
+					// that has been holding the slot for far too long.
+					var running []gate.Entry
+					if st, err := g.Status(); err == nil {
+						running = st.Running
+					}
+					fmt.Fprintf(stderr, "qrun: still queued after %s, position %d%s\n", steps.Dur(time.Since(start)), position, runningNow(running, time.Now()))
 				}
 				mu.Unlock()
 			}
@@ -124,7 +172,14 @@ func waitInLine(ctx context.Context, stderr io.Writer, slots int, title string) 
 		mu.Lock()
 		defer mu.Unlock()
 		if position == 0 {
-			fmt.Fprintf(stderr, "qrun: queued at position %d%s. Cancelling loses this place in line.\n", w.Position, runningNow(w.Running, start))
+			place, ifCancelled := "", "Cancelling loses this place in line."
+			if w.Rejoined {
+				place = ", the place held from an earlier attempt"
+			}
+			if cfg.Hold > 0 {
+				ifCancelled = fmt.Sprintf("If cancelled, this place is held for %s for the same command run again.", config.FormatDuration(cfg.Hold))
+			}
+			fmt.Fprintf(stderr, "qrun: queued at position %d%s%s. %s\n", w.Position, place, runningNow(w.Running, start), ifCancelled)
 		} else {
 			fmt.Fprintf(stderr, "qrun: now at position %d\n", w.Position)
 		}
