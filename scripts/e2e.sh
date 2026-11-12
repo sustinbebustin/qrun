@@ -164,6 +164,24 @@ check "summary says interrupted" "$(grep -c 'interrupted' out.term)" "1"
 await_procs "^sleep $nap" 0; check "no grandchild left behind" "$?" "0"
 check "slot is free" "$("$Q" status | head -1)" "running: none (1 slot free)"
 
+echo "== a run that outlasts the time limit is stopped and frees the slot"
+"$Q" config set time_limit 1s >/dev/null
+nap="300.$$$RANDOM"
+"$Q" --step "stuck=sh -c 'sleep $nap; touch $W/outlived' & wait" --step "later=touch $W/outlived" >out.limit 2>err.limit
+check "exit" "$?" "124"
+check "the summary says why" "$(grep -c 'timed out at the 1s time limit' out.limit)" "1"
+check "and that the later step did not run" "$(grep -c '1 later step(s) not run' out.limit)" "1"
+check "stderr names the setting to change" "$(grep -c 'qrun config set time_limit' err.limit)" "1"
+await_procs "^sleep $nap" 0; check "no grandchild left behind" "$?" "0"
+check "nothing ran past the limit" "$([ -e "$W/outlived" ] && echo yes || echo no)" "no"
+check "slot is free" "$("$Q" status | head -1)" "running: none (1 slot free)"
+"$Q" exec -- sleep "$nap" 2>/dev/null
+check "exec is stopped the same way" "$?" "124"
+# The limit is on holding a slot, and this run holds none.
+"$Q" --no-queue --step "free=sleep 2" >out.free 2>&1
+check "a run outside the line has no limit" "$(grep -c '^\[PASS\] free' out.free)" "1"
+"$Q" config unset time_limit >/dev/null
+
 echo "== SIGKILL of a running run frees the slot"
 # The killed run's step lives on for a while as an orphan. A lock inherited
 # by it would keep the slot busy until it exited.

@@ -60,6 +60,10 @@ _Avoid_: Reservation, ghost, tombstone
 How long a held place is kept.
 _Avoid_: Grace period, timeout
 
+**Time limit**:
+The longest a run may hold a slot before it is stopped. It bounds how long one run can block the queue, not how long a command may take: a run that holds no slot has none.
+_Avoid_: Timeout, deadline, max runtime
+
 ### Limits
 
 **Budget**:

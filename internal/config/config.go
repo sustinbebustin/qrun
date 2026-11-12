@@ -31,8 +31,11 @@ type Config struct {
 	// Hold is how long the place of a run that left the line before it was
 	// admitted is kept for a rerun of the same command. 0 gives the place up
 	// at once.
-	Hold   time.Duration
-	Budget Budget
+	Hold time.Duration
+	// TimeLimit is the longest a run may hold a slot before it is stopped,
+	// so that a hung command cannot block the line for good. 0 sets no limit.
+	TimeLimit time.Duration
+	Budget    Budget
 }
 
 // Budget is the resource ceiling every run shares.
@@ -127,9 +130,10 @@ func Load(path string, def Config) (Config, error) {
 // file is the on-disk shape. Pointers distinguish "not set" from a zero value,
 // since 0 slots and 0 cpus both mean something.
 type file struct {
-	Slots  *int    `toml:"slots"`
-	Hold   *string `toml:"hold"`
-	Budget struct {
+	Slots     *int    `toml:"slots"`
+	Hold      *string `toml:"hold"`
+	TimeLimit *string `toml:"time_limit"`
+	Budget    struct {
 		Enabled    *bool   `toml:"enabled"`
 		CPUs       *int    `toml:"cpus"`
 		MemoryMax  *string `toml:"memory_max"`
@@ -181,26 +185,16 @@ var keys = []Key{
 	countKey("slots", "2", "no queue", []string{
 		"Runs allowed at once, machine-wide. 0 turns the queue off.",
 	}, func(c *Config) *int { return &c.Slots }, func(f *file) *int { return f.Slots }),
-	{
-		Name: "hold",
-		Doc: []string{
-			"How long a cancelled run's place in line is kept for a rerun of the same",
-			`command from the same directory. A duration such as "90s" or "5m"; "0" gives`,
-			"the place up at once.",
-		},
-		Example: "10m",
-		quoted:  true,
-		get:     func(c Config) string { return FormatDuration(c.Hold) },
-		set: func(c *Config, text string) error {
-			d, err := time.ParseDuration(text)
-			if err != nil || d < 0 {
-				return errors.New(`want a duration such as "90s", "5m" or "1h", or "0" to give a place up at once`)
-			}
-			c.Hold = d
-			return nil
-		},
-		raw: func(f *file) (string, bool) { return deref(f.Hold) },
-	},
+	durationKey("hold", "10m", "give a place up at once", []string{
+		"How long a cancelled run's place in line is kept for a rerun of the same",
+		`command from the same directory. A duration such as "90s" or "5m"; "0" gives`,
+		"the place up at once.",
+	}, func(c *Config) *time.Duration { return &c.Hold }, func(f *file) *string { return f.Hold }),
+	durationKey("time_limit", "30m", "no limit", []string{
+		"The longest a run may hold a slot before qrun stops it, so that a hung command",
+		`cannot block the line for good. A duration such as "30m" or "2h"; "0" sets no`,
+		"limit. Time spent waiting in line does not count.",
+	}, func(c *Config) *time.Duration { return &c.TimeLimit }, func(f *file) *string { return f.TimeLimit }),
 	{
 		Name:    "budget.enabled",
 		Doc:     []string{"false runs everything with no CPU or memory limit."},
@@ -264,6 +258,27 @@ func countKey(name, example, zero string, doc []string, field func(*Config) *int
 			}
 			return strconv.Itoa(*p), true
 		},
+	}
+}
+
+// durationKey is a setting that is a length of time, where "0" switches it
+// off; zero names what "0" does.
+func durationKey(name, example, zero string, doc []string, field func(*Config) *time.Duration, raw func(*file) *string) Key {
+	return Key{
+		Name:    name,
+		Doc:     doc,
+		Example: example,
+		quoted:  true,
+		get:     func(c Config) string { return FormatDuration(*field(&c)) },
+		set: func(c *Config, text string) error {
+			d, err := time.ParseDuration(text)
+			if err != nil || d < 0 {
+				return fmt.Errorf(`want a duration such as "90s", "5m" or "1h", or "0" to %s`, zero)
+			}
+			*field(c) = d
+			return nil
+		},
+		raw: func(f *file) (string, bool) { return deref(raw(f)) },
 	}
 }
 

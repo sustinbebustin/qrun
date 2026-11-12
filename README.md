@@ -167,7 +167,7 @@ Both are ordinary command lines, so a Makefile or a `package.json` script takes 
 qrun never prompts, and a usage error exits before anything runs or waits, with a correct example invocation.
 
 - **stdout is the result, stderr is commentary.** The summary (or, under `exec`, the command's own output) is on stdout. Queue messages and progress go to stderr.
-- **Exit status.** Quiet run: `0` every step passed, `1` a step failed, `2` usage error, `130` interrupted. `exec`: the command's own status, `127` if it cannot be started, `130` if interrupted while queued. `status`: `0`, or `1` if the queue cannot be read. `config`: `0`, `1` if the settings file is invalid or cannot be written, `2` usage error.
+- **Exit status.** Quiet run: `0` every step passed, `1` a step failed, `2` usage error, `124` stopped at the time limit, `130` interrupted. `exec`: the command's own status, `124` if stopped at the time limit, `127` if it cannot be started, `130` if interrupted while queued. `status`: `0`, or `1` if the queue cannot be read. `config`: `0`, `1` if the settings file is invalid or cannot be written, `2` usage error.
 - **Progress.** On a terminal, a spinner that erases itself. On a pipe or in a background run, a `... <step> running (40.0s)` line every 20 seconds, and while queued, `qrun: still queued after 1m30s, position 2; running now: ...` every 30 seconds, so a waiting run is never mistaken for a hung one and a run that has held the slot far too long is in plain sight.
 - **Read the summary, not the log.** A failed step's excerpt is its diagnostics: `file:line` references, test failures, panics and compiler errors across common toolchains, or the tail of the output when nothing matches. Color is switched off for the steps. The full log is always written, and its path is printed for the cases the excerpt does not settle.
 - **A queued run that is cancelled keeps its place.** With many agents the wait can outlast a command timeout, and a retry that went to the back of the line each time would never be admitted. So a run that leaves the line before it starts, cancelled or killed, has its place held for 5 minutes (the `hold` setting): the same command run again from the same directory rejoins there. Nothing waits for a held place, so a run that never comes back delays nobody. It is still better to give verification a long timeout or run it in the background: a run cancelled after it has started loses its work.
@@ -204,6 +204,7 @@ qrun config get budget.memory_max                    # one bare value, for a scr
 ```text
 slots = 2                    # set in the settings file (default: 1)
 hold = "5m"                  # default
+time_limit = "0"             # default
 budget.enabled = true        # default
 budget.cpus = 8              # set in the settings file (default: 11)
 budget.memory_max = "16G"    # set in the settings file (default: 12297564K)
@@ -215,6 +216,7 @@ budget.memory_high = "none"  # default
 |---|---|---|
 | `slots` | Runs allowed at once, machine-wide. `0` turns the queue off. | `1` |
 | `hold` | How long a cancelled run's place in line is kept for a rerun of the same command from the same directory. A duration such as `90s` or `5m`; `0` gives the place up at once. | `5m` |
+| `time_limit` | The longest a run may hold a slot before qrun stops it, so that a hung command cannot block the line for good. A duration such as `30m` or `2h`; `0` sets no limit. Time spent waiting in line does not count. | `0` |
 | `budget.enabled` | `false` runs everything with no CPU or memory limit. | `true` |
 | `budget.cpus` | CPU quota in whole cores. `0` means no CPU limit. | half the cores |
 | `budget.memory_max` | Hard memory cap, enforced with swap off. A whole number with `K`, `M`, `G` or `T`, a percentage of RAM such as `50%`, or `none`. | half of RAM |
@@ -246,7 +248,8 @@ Two environment variables opt a single run out without changing the shared limit
 
 | Symptom | Check |
 |---|---|
-| A run waits and nothing seems to be running | `qrun status` names the run holding the slot, with its directory and pid. A stuck command there holds the line for everyone; stop it and the next run starts at once. |
+| A run waits and nothing seems to be running | `qrun status` names the run holding the slot, with its directory and pid. A stuck command there holds the line for everyone; stop it and the next run starts at once. To have qrun stop such a run itself, set a limit: `qrun config set time_limit 30m`. |
+| A run ends with `exit 124` and `timed out at the ... time limit` | It held its slot for longer than `time_limit` and was stopped; the steps after that point did not run. If the work is hung, fix that. If it needs the time, raise the limit with `qrun config set time_limit DURATION`, or `0` for none. |
 | A run that queued later was admitted first | It rejoined a held place: an earlier attempt of the same command from that directory was cancelled while queued. `qrun status` lists held places. `qrun config set hold 0` turns holding off. |
 | A step fails with `exit 137` | The kernel killed a process because the shared budget hit `memory_max`. `journalctl -k \| grep oom-kill` confirms. Rerun once other runs finish, lower the step's own parallelism, or raise the cap with `qrun config set budget.memory_max SIZE`. |
 | `qrun status` says the budget is not enforced | It gives the reason. No systemd (macOS, most containers): nothing to do, the queue still applies. The cpu controller is not delegated: add `Delegate=cpu cpuset io memory pids` under `[Service]` in a drop-in for `user@.service`, then `systemctl daemon-reload` and log in again. |
@@ -257,6 +260,7 @@ Two environment variables opt a single run out without changing the shared limit
 
 - **The budget is Linux-only.** Elsewhere the queue and the summaries still work.
 - **A run killed with SIGKILL leaves its children running.** Its slot is freed at once, so the next run can overlap with the orphans until they exit. They stay inside the budget. SIGINT, SIGTERM and SIGHUP are forwarded and stop the whole step.
+- **`qrun exec` stops only the command it started.** When a pass-through run is stopped at the time limit, the command gets SIGTERM and whatever it started is left to it; a quiet run stops the whole step. The slot is freed either way, and anything left behind stays inside the budget.
 - **Only commands that go through qrun are throttled.** A tool an agent runs directly is not.
 - **Windows is not supported.**
 

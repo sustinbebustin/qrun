@@ -20,3 +20,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A change to `slots` reaches runs that are already waiting, within a couple of seconds.
 - `qrun status` lists the held places and says why the budget is not enforced when it is not.
 - A waiting run's periodic `still queued` line names the run holding the slot and how long it has held it.
+- A time limit on holding a slot (the `time_limit` setting, off by default): a run that outlasts it is stopped and exits `124`, so a hung command cannot block every other run on the machine.

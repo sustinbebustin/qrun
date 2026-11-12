@@ -62,7 +62,8 @@ var stopGrace = 10 * time.Second
 
 // Run executes steps in order and returns one Result per step that ran. A
 // failing step does not stop the run: verification reports every failure at
-// once. Cancelling ctx stops the current step and skips the rest.
+// once. Cancelling ctx, or its deadline passing, stops the current step and
+// skips the rest.
 func Run(ctx context.Context, steps []Step, opts Options) []Result {
 	results := make([]Result, 0, len(steps))
 	for _, step := range steps {
@@ -157,6 +158,11 @@ func runStep(ctx context.Context, step Step, opts Options) Result {
 // outcome reduces how a step ended to an exit code and, when the code alone
 // would mislead, a reason. Zero and no reason means it passed.
 func outcome(ctx context.Context, cmd *exec.Cmd, runErr error) (code int, reason string) {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		// 124 as timeout(1) exits, and the deadline's cause as the reason:
+		// whoever set the deadline is the one who can say what limit it was.
+		return 124, context.Cause(ctx).Error()
+	}
 	if ctx.Err() != nil {
 		return 130, "interrupted"
 	}

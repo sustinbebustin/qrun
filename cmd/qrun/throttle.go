@@ -78,7 +78,8 @@ func liveSlots(slots int) func() int {
 	}
 }
 
-// throttled runs work under the queue and the budget. argv is this process's
+// throttled runs work under the queue, the budget and, for a run that holds
+// a slot, the time limit. argv is this process's
 // own arguments: with a budget in force qrun re-executes itself inside the
 // budget's scope, and work then runs in that inner process, while this one
 // keeps holding the slot.
@@ -120,7 +121,33 @@ func throttled(ctx context.Context, stderr io.Writer, title string, noQueue bool
 			fmt.Fprintln(stderr, "qrun: could not start inside the budget (systemd-run failed to launch), running without CPU or memory limits")
 		}
 	}
-	return work(ctx)
+	// The time limit is on holding a slot, so a run that holds none (no
+	// queue, --no-queue) has none: it blocks nobody. The mark is inherited,
+	// so the re-executed qrun, which is where the work runs under a budget,
+	// applies the limit too.
+	if os.Getenv(heldEnv) == "" {
+		return work(ctx)
+	}
+	return limited(ctx, stderr, cfg.TimeLimit, work)
+}
+
+// limited runs work, stopping it once it has run for limit. 0 is no limit.
+// The deadline's cause is the reason a step shows in its summary.
+func limited(ctx context.Context, stderr io.Writer, limit time.Duration, work func(context.Context) int) int {
+	if limit <= 0 {
+		return work(ctx)
+	}
+	text := config.FormatDuration(limit)
+	ctx, cancel := context.WithTimeoutCause(ctx, limit, fmt.Errorf("timed out at the %s time limit", text))
+	defer cancel()
+
+	code := work(ctx)
+	// Work that passed keeps its pass even if the deadline came right after.
+	if code == exitOK || !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return code
+	}
+	fmt.Fprintf(stderr, "qrun: stopped at the time limit of %s. A run may hold its slot no longer than that, so that a hung command cannot block the line; what had not finished by then did not run.\n  If this work needs longer, raise the limit with `qrun config set time_limit DURATION`, or \"0\" for none.\n", text)
+	return exitTimedOut
 }
 
 // waitInLine takes a slot, reporting on stderr only if the run has to wait.
