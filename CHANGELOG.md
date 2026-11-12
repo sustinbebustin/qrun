@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-12
+
 ### Added
 - A machine-wide, first-come-first-served queue for heavy commands. A run that crashes or is killed gives up its slot at once, with no daemon to clean up after it.
 - A CPU and memory budget shared by every run, enforced through one systemd user slice (Linux): a CPU quota and a hard memory cap with swap off.
