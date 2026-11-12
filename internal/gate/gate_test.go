@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -315,4 +316,211 @@ func TestRefusesARootThatIsNotADirectory(t *testing.T) {
 	if _, err := g.Acquire(context.Background(), who("a"), nil); err == nil {
 		t.Error("Acquire followed a symlink as its root; in /tmp another user could point it anywhere")
 	}
+}
+
+// holding returns a gate that keeps a cancelled waiter's place for hold.
+func holding(t *testing.T, hold time.Duration) Gate {
+	t.Helper()
+	g := newGate(t, 1)
+	g.Hold = hold
+	return g
+}
+
+// cancelWaiter cancels a queued waiter and waits for it to leave.
+func cancelWaiter(t *testing.T, cancel context.CancelFunc, w waiter) {
+	t.Helper()
+	cancel()
+	select {
+	case err := <-w.failed:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled waiter did not return")
+	}
+}
+
+func TestACancelledWaiterKeepsItsPlaceForARerun(t *testing.T) {
+	g := holding(t, time.Minute)
+	release, err := g.Acquire(context.Background(), who("running"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	first := startWaiter(ctx, g, "retried")
+	mustQueue(t, first)
+	behind := startWaiter(context.Background(), g, "behind")
+	if wt := mustQueue(t, behind); wt.Position != 2 {
+		t.Fatalf("position = %d, want 2", wt.Position)
+	}
+
+	cancelWaiter(t, cancel, first)
+	if wt := mustQueue(t, behind); wt.Position != 1 {
+		t.Errorf("position with the run ahead gone = %d, want 1: a held place is not a run in line", wt.Position)
+	}
+	st, err := g.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := titles(st.Waiting); !slices.Equal(got, []string{"behind"}) {
+		t.Errorf("waiting = %v, want only the run still in line", got)
+	}
+	if got := titles(st.Held); !slices.Equal(got, []string{"retried"}) {
+		t.Errorf("held = %v, want the cancelled run's place", got)
+	}
+
+	again := startWaiter(context.Background(), g, "retried")
+	if wt := mustQueue(t, again); wt.Position != 1 || !wt.Rejoined {
+		t.Errorf("rerun queued as %+v, want its old place at position 1, marked as rejoined", wt)
+	}
+	if wt := mustQueue(t, behind); wt.Position != 2 || wt.Rejoined {
+		t.Errorf("the run behind was told %+v, want position 2", wt)
+	}
+
+	release()
+	releaseAgain := mustAcquire(t, again)
+	mustStayQueued(t, behind)
+	releaseAgain()
+	mustAcquire(t, behind)()
+}
+
+func TestAHeldPlaceDoesNotBlockTheLine(t *testing.T) {
+	g := holding(t, time.Minute)
+	release, err := g.Acquire(context.Background(), who("running"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	quitter := startWaiter(ctx, g, "quitter")
+	mustQueue(t, quitter)
+	patient := startWaiter(context.Background(), g, "patient")
+	mustQueue(t, patient)
+
+	cancelWaiter(t, cancel, quitter)
+	release()
+	mustAcquire(t, patient)()
+}
+
+func TestAHeldPlaceIsGivenUpWhenTheHoldRunsOut(t *testing.T) {
+	g := holding(t, 40*time.Millisecond)
+	release, err := g.Acquire(context.Background(), who("running"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	first := startWaiter(ctx, g, "late")
+	mustQueue(t, first)
+	other := startWaiter(context.Background(), g, "other")
+	mustQueue(t, other)
+	cancelWaiter(t, cancel, first)
+
+	time.Sleep(2 * g.Hold)
+	again := startWaiter(context.Background(), g, "late")
+	if wt := mustQueue(t, again); wt.Position != 2 || wt.Rejoined {
+		t.Errorf("rerun after the hold queued as %+v, want the back of the line", wt)
+	}
+	if st, err := g.Status(); err != nil || len(st.Held) != 0 {
+		t.Errorf("held = %+v (error %v), want none once the hold ran out", st.Held, err)
+	}
+
+	release()
+	mustAcquire(t, other)()
+	mustAcquire(t, again)()
+}
+
+func TestAHeldPlaceIsOnlyForTheSameCommandInTheSameDirectory(t *testing.T) {
+	for name, rerun := range map[string]Entry{
+		"another title":     {Title: "other", Dir: "/work/held", PID: os.Getpid()},
+		"another directory": {Title: "held", Dir: "/work/elsewhere", PID: os.Getpid()},
+		// Two commands can share a title: every untitled multi-step run does.
+		"another command line": {Title: "held", Dir: "/work/held", PID: os.Getpid(), Fingerprint: "other"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := holding(t, time.Minute)
+			release, err := g.Acquire(context.Background(), who("running"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			first := startWaiter(ctx, g, "held")
+			mustQueue(t, first)
+			other := startWaiter(context.Background(), g, "other-run")
+			mustQueue(t, other)
+			cancelWaiter(t, cancel, first)
+
+			queued := make(chan Wait, 16)
+			admitted := make(chan func(), 1)
+			go func() {
+				rel, err := g.Acquire(context.Background(), rerun, func(wt Wait) { queued <- wt })
+				if err == nil {
+					admitted <- rel
+				}
+			}()
+			select {
+			case wt := <-queued:
+				if wt.Position != 2 || wt.Rejoined {
+					t.Errorf("queued as %+v, want the back of the line", wt)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("run did not queue")
+			}
+			release()
+			mustAcquire(t, other)()
+			(<-admitted)()
+		})
+	}
+}
+
+// A waiter that is killed cannot say it is leaving: all it leaves is a ticket
+// with no lock on it.
+func TestAKilledWaitersPlaceIsHeldToo(t *testing.T) {
+	g := holding(t, time.Minute)
+	release, err := g.Acquire(context.Background(), who("running"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphan := filepath.Join(g.Dir, queueDir, ticketName(1))
+	if err := os.WriteFile(orphan, []byte(`{"title":"killed","dir":"/work/killed"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	other := startWaiter(context.Background(), g, "other")
+	if wt := mustQueue(t, other); wt.Position != 1 {
+		t.Errorf("position = %d, want 1: the dead waiter must not count", wt.Position)
+	}
+
+	again := startWaiter(context.Background(), g, "killed")
+	if wt := mustQueue(t, again); wt.Position != 1 || !wt.Rejoined {
+		t.Errorf("rerun queued as %+v, want the killed run's place", wt)
+	}
+	release()
+	releaseAgain := mustAcquire(t, again)
+	mustStayQueued(t, other)
+	releaseAgain()
+	mustAcquire(t, other)()
+}
+
+func TestASlotCountChangeReachesAWaitingRun(t *testing.T) {
+	var slots atomic.Int64
+	slots.Store(1)
+	g := newGate(t, 1)
+	g.Reload = func() int { return int(slots.Load()) }
+
+	releaseA, err := g.Acquire(context.Background(), who("a"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := startWaiter(context.Background(), g, "b")
+	mustQueue(t, b)
+	c := startWaiter(context.Background(), g, "c")
+	mustQueue(t, c)
+
+	slots.Store(2)
+	releaseB := mustAcquire(t, b)
+	mustStayQueued(t, c)
+
+	// 0 switches the queue off: nothing is left to wait for.
+	slots.Store(0)
+	mustAcquire(t, c)()
+	releaseB()
+	releaseA()
 }
