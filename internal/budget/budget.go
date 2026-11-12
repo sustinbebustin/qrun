@@ -22,6 +22,7 @@ package budget
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -47,27 +48,40 @@ func InScope() bool {
 	return os.Getenv(inScopeEnv) != ""
 }
 
-// Available reports whether a budget can be enforced here: systemd-run and
-// systemctl exist, a user manager is reachable, and it has the cpu controller.
+// Available reports whether a budget can be enforced here.
 func Available() bool {
-	if _, err := exec.LookPath("systemd-run"); err != nil {
-		return false
-	}
-	if _, err := exec.LookPath("systemctl"); err != nil {
-		return false
+	return Unavailable() == nil
+}
+
+// Unavailable returns why a budget cannot be enforced here, or nil when it
+// can: systemd-run and systemctl exist, a user manager is reachable, and it
+// has the cpu controller.
+func Unavailable() error {
+	for _, tool := range []string{"systemd-run", "systemctl"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			return fmt.Errorf("%s is not installed (the budget is enforced by systemd)", tool)
+		}
 	}
 	// The manager's socket is found by uid, not through XDG_RUNTIME_DIR, for
 	// the same reason the queue directory is: harnesses rewrite the variable.
 	uid := strconv.Itoa(os.Getuid())
-	if _, err := os.Stat("/run/user/" + uid + "/systemd/private"); err != nil {
-		return false
+	if socket := "/run/user/" + uid + "/systemd/private"; !exists(socket) {
+		return fmt.Errorf("no systemd user manager is running for uid %s (%s is missing)", uid, socket)
 	}
 	controllers, err := os.ReadFile(
 		"/sys/fs/cgroup/user.slice/user-" + uid + ".slice/user@" + uid + ".service/cgroup.controllers")
 	if err != nil {
-		return false
+		return fmt.Errorf("the systemd user manager's cgroup controllers cannot be read: %w", err)
 	}
-	return slices.Contains(strings.Fields(string(controllers)), "cpu")
+	if !slices.Contains(strings.Fields(string(controllers)), "cpu") {
+		return errors.New("the cpu controller is not delegated to the systemd user manager (Delegate=cpu on user@.service turns it on)")
+	}
+	return nil
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // Properties renders b as systemd unit properties for the slice. Every limit
