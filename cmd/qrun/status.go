@@ -22,9 +22,12 @@ type statusReport struct {
 	Running []gate.Entry `json:"running"`
 	Waiting []gate.Entry `json:"waiting"`
 	// Held is the places kept for runs that left the line to rejoin.
-	Held   []gate.Entry `json:"held"`
-	Budget budgetReport `json:"budget"`
-	Config configReport `json:"config"`
+	Held []gate.Entry `json:"held"`
+	// TimeLimit is how long a run may hold a slot, as the settings file
+	// takes it. Empty when there is no limit.
+	TimeLimit string       `json:"time_limit,omitempty"`
+	Budget    budgetReport `json:"budget"`
+	Config    configReport `json:"config"`
 }
 
 type budgetReport struct {
@@ -79,6 +82,9 @@ func cmdStatus(argv []string, stdout, stderr io.Writer) int {
 			Slice:      budget.SliceName,
 		},
 		Config: configReport{Path: path, Exists: fileExists(path)},
+	}
+	if cfg.TimeLimit > 0 {
+		report.TimeLimit = config.FormatDuration(cfg.TimeLimit)
 	}
 	if cfg.Budget.Enabled {
 		if why := budget.Unavailable(); why != nil {
@@ -146,6 +152,9 @@ func renderStatus(w io.Writer, r statusReport, now time.Time) {
 		fmt.Fprintf(w, "budget: not enforced on this machine: %s. Only the queue applies.\n", r.Budget.Reason)
 	default:
 		fmt.Fprintf(w, "budget: %s, %s, shared by all runs (%s)\n", cpuDesc(r.Budget.CPUs), memoryDesc(r.Budget), r.Budget.Slice)
+	}
+	if r.TimeLimit != "" {
+		fmt.Fprintf(w, "time limit: a run is stopped once it has held a slot for %s\n", r.TimeLimit)
 	}
 
 	switch {

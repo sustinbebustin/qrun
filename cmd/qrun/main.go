@@ -18,12 +18,13 @@ import (
 // version is set at release time with -ldflags "-X main.version=...".
 var version = "dev"
 
-// Exit codes. A quiet run exits 0 or 1; `qrun exec` exits with its command's
-// own code.
+// Exit codes. A quiet run that runs to its end exits 0 or 1; `qrun exec`
+// exits with its command's own code.
 const (
 	exitOK          = 0
 	exitFailed      = 1
 	exitUsage       = 2
+	exitTimedOut    = 124 // as timeout(1) exits
 	exitNotFound    = 127
 	exitInterrupted = 130
 )
@@ -95,7 +96,8 @@ Examples:
   qrun --fail-nonempty --step 'fmt=gofmt -l .'
   qrun --show-on-success --step 'diff=git diff --stat'
 
-Exit status: 0 every step passed, 1 a step failed, 2 usage error, 130 interrupted.
+Exit status: 0 every step passed, 1 a step failed, 2 usage error, 130 interrupted,
+124 stopped at the machine's time limit (the time_limit setting; off by default).
 
 While queued, qrun reports its position on stderr. Let a queued run wait. One
 that is cancelled or times out keeps its place for a few minutes: run the same
@@ -128,7 +130,8 @@ Examples:
   qrun exec --no-queue -- gofmt -l .
 
 Exit status: the command's own; 127 if it cannot be started, 130 if interrupted
-while queued.
+while queued, 124 if stopped at the machine's time limit (the time_limit
+setting; off by default).
 `
 
 const helpStatus = `qrun status - show what is running, what is waiting, and the limits in force

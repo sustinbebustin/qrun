@@ -295,6 +295,13 @@ func TestRenderStatus(t *testing.T) {
 		}
 	})
 
+	t.Run("names the time limit when one is set", func(t *testing.T) {
+		got := renderedStatus(statusReport{Slots: 1, TimeLimit: "30m", Budget: enforced, Config: settings})
+		if want := "time limit: a run is stopped once it has held a slot for 30m\n"; !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	})
+
 	t.Run("says when a limit is not in force, and why", func(t *testing.T) {
 		got := renderedStatus(statusReport{Slots: 0, Budget: budgetReport{Enabled: true, Reason: "systemd-run is not installed"}, Config: settings})
 		if !strings.Contains(got, "queue: off") || !strings.Contains(got, "budget: not enforced on this machine: systemd-run is not installed. Only the queue applies.\n") {
