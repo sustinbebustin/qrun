@@ -10,6 +10,9 @@ set -u
 Q=$1
 W=$(mktemp -d)
 export QRUN_NO_PROGRESS=1
+# Its own settings file: the checks assume the defaults, and one of them
+# changes a setting.
+export XDG_CONFIG_HOME="$W/config"
 cd "$W" || exit 1
 fail=0
 
@@ -26,15 +29,16 @@ check() {
 hold() { echo "while [ ! -e $W/flag.$1 ]; do sleep 0.05; done"; }
 release() { touch "$W/flag.$1"; }
 
-# titles SECTION prints the titles `qrun status` lists under running or waiting.
+# titles SECTION prints the titles `qrun status` lists under running, waiting
+# or held.
 titles() {
   "$Q" status --json | awk -v section="\"$1\"" '
-    /"running"|"waiting"/ { on = index($0, section) > 0 }
+    /"running"|"waiting"|"held"/ { on = index($0, section) > 0 }
     on && /"title"/ { gsub(/.*"title": "|",?$/, ""); print }'
 }
 
-# await SECTION TITLE waits up to 10s for a run to show under running, waiting
-# or (for "listed") either.
+# await SECTION TITLE waits up to 10s for a run to show under running, waiting,
+# held or (for "listed") either of the first two.
 await() {
   local section=$1 title=$2
   for _ in $(seq 1 200); do
@@ -101,6 +105,53 @@ release cancelled
 wait
 check "order" "$(tr '\n' ' ' < order)" "a "
 check "message" "$(grep -c 'interrupted while queued; nothing was run' err.quit)" "1"
+
+echo "== a cancelled or killed waiter's place is held for its rerun"
+: > order
+"$Q" --step "a=echo a >> $W/order; $(hold held)" >/dev/null 2>&1 &
+await running a
+"$Q" --step "b=echo b >> $W/order" >/dev/null 2>err.b & b=$!
+await waiting b
+"$Q" --step "c=echo c >> $W/order" >/dev/null 2>&1 & c=$!
+await waiting c
+"$Q" --step "d=echo d >> $W/order" >/dev/null 2>&1 &
+await waiting d
+kill -TERM $b; wait $b
+kill -KILL $c; wait $c 2>/dev/null
+await held c
+check "the cancelled run was told its place is held" "$(grep -c 'place in line is held for 5m' err.b)" "1"
+check "only the run still in line is waiting" "$(titles waiting | tr '\n' ' ')" "d "
+# The waiters the earlier checks stopped still have held places of their own.
+check "both places are held" "$(titles held | grep -x -e b -e c | tr '\n' ' ')" "b c "
+# Another command that happens to share b's title is not b's rerun.
+"$Q" --step "b=echo e >> $W/order" >/dev/null 2>&1 &
+for _ in $(seq 1 200); do [ "$(titles waiting | wc -l)" -ge 2 ] && break; sleep 0.05; done
+check "a different command joins at the back" "$(titles waiting | tr '\n' ' ')" "d b "
+# Rerun in the other order: the place decides, not the moment of the rerun.
+"$Q" --step "c=echo c >> $W/order" >/dev/null 2>&1 &
+await waiting c
+"$Q" --step "b=echo b >> $W/order" >/dev/null 2>err.b2 &
+for _ in $(seq 1 200); do [ "$(titles waiting | wc -l)" -ge 4 ] && break; sleep 0.05; done
+check "the reruns are back ahead of the runs that stayed" "$(titles waiting | tr '\n' ' ')" "b c d b "
+check "the rerun was told it took its place back" "$(grep -c 'queued at position 1, the place held from an earlier attempt' err.b2)" "1"
+release held
+wait
+check "order" "$(tr '\n' ' ' < order)" "a b c d e "
+check "neither place is still held" "$(titles held | grep -cx -e b -e c)" "0"
+
+echo "== a new slot count reaches a run that is already waiting"
+"$Q" --step "one=$(hold slots)" >/dev/null 2>&1 &
+await running one
+"$Q" --step "two=$(hold slots)" >/dev/null 2>&1 &
+await waiting two
+"$Q" config set slots 2 >/dev/null
+check "status shows the new count" "$("$Q" status | head -1)" "running (1 of 2 slots):"
+await running two
+check "both run at once" "$(titles running | tr '\n' ' ')" "one two "
+"$Q" config unset slots >/dev/null
+release slots
+wait
+check "back to one slot" "$("$Q" status | head -1)" "running: none (1 slot free)"
 
 echo "== SIGTERM to a running run stops its children and frees the slot"
 # A duration no other process on the machine will be sleeping for.

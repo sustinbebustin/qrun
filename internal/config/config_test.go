@@ -5,12 +5,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDefault(t *testing.T) {
-	t.Run("one slot, half the cpus, half of RAM with no swap", func(t *testing.T) {
+	t.Run("one slot, a five-minute hold, half the cpus, half of RAM with no swap", func(t *testing.T) {
 		c := Default(Machine{CPUs: 20, MemoryKiB: 24_595_128})
-		want := Config{Slots: 1, Budget: Budget{Enabled: true, CPUs: 10, MemoryMax: "12297564K"}}
+		want := Config{Slots: 1, Hold: 5 * time.Minute, Budget: Budget{Enabled: true, CPUs: 10, MemoryMax: "12297564K"}}
 		if c != want {
 			t.Errorf("Default = %+v, want %+v", c, want)
 		}
@@ -78,6 +79,18 @@ func TestParse(t *testing.T) {
 		}
 	})
 
+	t.Run("hold takes a duration, and 0 to give a place up at once", func(t *testing.T) {
+		for text, want := range map[string]time.Duration{`hold = "90s"`: 90 * time.Second, `hold = "0"`: 0} {
+			c, err := Parse(text, def)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Hold != want {
+				t.Errorf("Parse(%q).Hold = %v, want %v", text, c.Hold, want)
+			}
+		}
+	})
+
 	t.Run("zero slots and zero cpus are valid ways to switch a limit off", func(t *testing.T) {
 		c, err := Parse("slots = 0\n[budget]\ncpus = 0\nenabled = false\n", def)
 		if err != nil {
@@ -96,6 +109,8 @@ func TestParse(t *testing.T) {
 		{"fractional size", "[budget]\nmemory_max = \"1.5G\"", "budget.memory_max"},
 		{"size with unknown suffix", "[budget]\nmemory_high = \"12GB\"", "budget.memory_high"},
 		{"percentage over 100", "[budget]\nmemory_max = \"150%\"", "budget.memory_max"},
+		{"hold that is not a duration", "hold = \"soon\"", "hold"},
+		{"negative hold", "hold = \"-5m\"", "hold"},
 		{"unknown key", "slot = 2", "slot"},
 		{"unknown budget key", "[budget]\nmem_max = \"1G\"", "budget.mem_max"},
 		{"wrong type", "slots = \"two\"", "slots"},

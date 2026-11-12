@@ -297,9 +297,9 @@ func TestRender(t *testing.T) {
 		}
 	})
 
-	t.Run("exit 137 names the memory cap and where to raise it", func(t *testing.T) {
+	t.Run("exit 137 names the memory cap and the command that raises it", func(t *testing.T) {
 		got := exitDesc(Result{ExitCode: 137})
-		for _, want := range []string{"SIGKILL", "memory cap", "budget.memory_max", "qrun status"} {
+		for _, want := range []string{"SIGKILL", "memory cap", "qrun config set budget.memory_max"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("exitDesc(137) = %q, want it to mention %q", got, want)
 			}
